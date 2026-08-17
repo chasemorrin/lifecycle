@@ -366,6 +366,41 @@ function todayIso(){
   return d.toISOString().slice(0, 10);
 }
 
+/* ---- Local cache fallback (used when JSONBin is unreachable) ---- */
+const CACHE_KEY = "upkeep_tasks_cache";
+const CACHE_TS_KEY = "upkeep_tasks_cache_ts";
+
+function cacheTasks(list){
+  try{
+    localStorage.setItem(CACHE_KEY, JSON.stringify(list));
+    localStorage.setItem(CACHE_TS_KEY, new Date().toISOString());
+  } catch(e){
+    console.warn("Couldn't write local cache", e);
+  }
+}
+
+function readCache(){
+  try{
+    const raw = localStorage.getItem(CACHE_KEY);
+    const ts = localStorage.getItem(CACHE_TS_KEY);
+    if (!raw) return null;
+    return { tasks: JSON.parse(raw), ts };
+  } catch(e){
+    return null;
+  }
+}
+
+function timeAgo(isoString){
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  return `${days}d ago`;
+}
+
 async function loadTasks(){
   setStatus("loading…");
   try{
@@ -375,12 +410,20 @@ async function loadTasks(){
     if (!res.ok) throw new Error(`JSONBin returned ${res.status}`);
     const data = await res.json();
     tasks = Array.isArray(data.record) ? data.record : [];
+    cacheTasks(tasks);
     setStatus(`synced · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`);
     render();
   } catch(err){
     console.error(err);
-    setStatus("couldn't load from JSONBin — check BIN_ID / API_KEY", true);
-    taskList.innerHTML = `<div class="error">Failed to load tasks. Open the console for details, and double-check CONFIG.BIN_ID and CONFIG.API_KEY at the top of the script.</div>`;
+    const cached = readCache();
+    if (cached){
+      tasks = cached.tasks;
+      render();
+      setStatus(`offline — showing cached data from ${timeAgo(cached.ts)}`, true);
+    } else {
+      setStatus("couldn't load from JSONBin — check BIN_ID / API_KEY", true);
+      taskList.innerHTML = `<div class="error">Failed to load tasks, and no cached copy exists yet on this device. Open the console for details, and double-check CONFIG.BIN_ID and CONFIG.API_KEY at the top of the script.</div>`;
+    }
   }
 }
 
@@ -396,9 +439,11 @@ async function saveTasks(){
       body: JSON.stringify(tasks)
     });
     if (!res.ok) throw new Error(`JSONBin returned ${res.status}`);
+    cacheTasks(tasks);
     setStatus(`synced · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`);
   } catch(err){
     console.error(err);
+    cacheTasks(tasks); // keep the edit locally even though the sync failed
     setStatus("save failed — changes are shown locally but not synced", true);
   }
 }
@@ -408,12 +453,14 @@ function markDone(id){
   if (!task) return;
   task.lastDone = todayIso();
   render();
+  cacheTasks(tasks);
   saveTasks();
 }
 
 function deleteTask(id){
   tasks = tasks.filter(t => String(t.id) !== String(id));
   render();
+  cacheTasks(tasks);
   saveTasks();
 }
 
@@ -437,6 +484,7 @@ function addTask(){
   nameInput.value = "";
   valueInput.value = "1";
   render();
+  cacheTasks(tasks);
   saveTasks();
 }
 
